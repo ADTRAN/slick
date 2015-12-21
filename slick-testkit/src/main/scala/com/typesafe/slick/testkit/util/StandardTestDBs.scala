@@ -9,6 +9,8 @@ import slick.memory.MemoryProfile
 import slick.jdbc.{SimpleJdbcAction, ResultSetAction, H2Profile, HsqldbProfile, MySQLProfile, DerbyProfile, PostgresProfile, SQLiteProfile}
 import slick.jdbc.GetResult._
 import slick.jdbc.meta.MTable
+import slick.cassandra.CassandraProfile
+import slick.sql.SqlProfile
 import org.junit.Assert
 
 import scala.concurrent.duration.Duration
@@ -112,6 +114,20 @@ object StandardTestDBs {
     val profile = MySQLProfile
     // Recreating the DB is faster than dropping everything individually
     override def dropUserArtifacts(implicit session: profile.Backend#Session) = {
+      session.close()
+      cleanUpBefore()
+    }
+  }
+
+  lazy val Cassandra = new CassandraTestDB() {
+    val profile = CassandraProfile
+
+    val confName: String = "cassandra"
+
+    def createDB(): slick.cassandra.CassandraBackend#DatabaseDef =
+      profile.backend.Database.forConfig("testConn", config)
+
+    def dropUserArtifacts(implicit session: slick.cassandra.CassandraBackend#SessionDef): Unit = {
       session.close()
       cleanUpBefore()
     }
