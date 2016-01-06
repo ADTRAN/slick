@@ -125,7 +125,7 @@ object StandardTestDBs {
     val confName: String = "cassandra"
 
     def createDB(): slick.cassandra.CassandraBackend#DatabaseDef =
-      profile.backend.Database.forConfig("testConn", config)
+      profile.backend.Database.forConfig("", config)
 
     def dropUserArtifacts(implicit session: slick.cassandra.CassandraBackend#SessionDef): Unit = {
       session.close()

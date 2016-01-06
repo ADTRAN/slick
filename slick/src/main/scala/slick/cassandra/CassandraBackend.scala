@@ -21,9 +21,6 @@ import slick.SlickException
 import slick.dbio._
 import slick.util._
 
-/** Backend for the basic database and session handling features.
-  * Concrete backends like `JdbcBackend` extend this type and provide concrete
-  * types for `Database`, `DatabaseFactory` and `Session`. */
 trait CassandraBackend extends RelationalBackend {
 
   type This = CassandraBackend
@@ -41,7 +38,20 @@ trait CassandraBackend extends RelationalBackend {
   val backend: CassandraBackend = this
 
   /** Create a Database instance through [[https://github.com/typesafehub/config Typesafe Config]].
-    * The supported config keys are backend-specific. This method is used by `DatabaseConfig`.
+    * This method is used by `DatabaseConfig`.
+    * Supported config keys:
+    * nodes:              Array of "IPv4 address:port" containing the location
+    *                     of the cassandra nodes.  Must specify either 'nodes'
+    *                     or 'zookeeper', but not both.  Default is to use
+    *                     zookeeper.
+    * zookeeper:          IPv4 address pointing to zookeeper instance with
+    *                     cassandra config.  Defaults to '127.0.0.1'
+    * zNode:              zNode containing location of cassandra nodes in
+    *                     zookeeper. defaults to '/cassandra'
+    * timeout:            milliseconds to wait for connection before aborting.
+    *                     Defaults to 60000.
+    * retryTime:          milliseconds to wait between connection retries.
+    *                     Defaults to 5000.
     * @param path The path in the configuration file for the database configuration, or an empty
     *             string for the top level of the `Config` object.
     * @param config The `Config` object to read from.
@@ -49,19 +59,17 @@ trait CassandraBackend extends RelationalBackend {
   def createDatabase(config: Config, path: String): Database = Database.forConfig(path, config)
 
   /** A database instance to which connections can be created. */
-  class DatabaseDef(val executor: AsyncExecutor, val zookeeperLocation: String) extends super.DatabaseDef { this: Database =>
+  class DatabaseDef(val executor: AsyncExecutor,
+    val zookeeperLocation: String,
+    val zNode: String,
+    val timeout: Int,
+    val retryTime: Int) extends super.DatabaseDef { this: Database =>
+
     /** Create a new session. The session needs to be closed explicitly by calling its close() method. */
     def createSession(): Session = {
-      new SessionDef(zookeeperLocation)
+      new ZookeeperSessionDef(zookeeperLocation, zNode, timeout, retryTime)
     }
 
-    /** Free all resources allocated by Slick for this Database, blocking the current thread until
-      * everything has been shut down.
-      *
-      * Backend implementations which are based on a naturally blocking shutdown procedure can
-      * simply implement this method and get `shutdown` as an asynchronous wrapper for free. If
-      * the underlying shutdown procedure is asynchronous, you should implement `shutdown` instead
-      * and wrap it with `Await.result` in this method. */
     def close: Unit = {
     }
 
@@ -79,28 +87,76 @@ trait CassandraBackend extends RelationalBackend {
   }
 
   trait DatabaseFactoryDef {
+    import com.typesafe.config.ConfigFactory
+    import scala.collection.JavaConversions.mapAsJavaMap
+
+    val defaults: Config = ConfigFactory.parseMap(Map(
+      "zookeeper"          -> "127.0.0.1",
+      "zNode"              -> "/cassandra",
+      "timeout"   -> 60000,
+      "retryTime" -> 5000))
+
     def forConfig(path: String, config: Config): Database = {
       val usedConfig = if (path.isEmpty) config else config.getConfig(path)
-      val zookeeperLocation = config.getString("zookeeper")
-      new DatabaseDef(AsyncExecutor.default(), zookeeperLocation)
+      val fallbackConfig = usedConfig withFallback defaults
+      val zookeeperLocation = fallbackConfig.getString("zookeeper")
+      val zNode = fallbackConfig.getString("zNode")
+      val timeout = fallbackConfig.getInt("timeout")
+      val retryTime = fallbackConfig.getInt("retryTime")
+      new DatabaseDef(AsyncExecutor.default(), zookeeperLocation, zNode, timeout, retryTime)
     }
   }
 
   import org.apache.curator.framework.recipes.cache.{NodeCache, NodeCacheListener}
+  import org.apache.curator.framework.state.ConnectionStateListener
 
-  class SessionDef(val zookeeperLocation: String) extends super.SessionDef  with NodeCacheListener {
-    import org.apache.curator.framework.CuratorFrameworkFactory
-    import org.apache.curator.retry.RetryForever
+  abstract class SessionDef extends super.SessionDef {
+    val connection: Future[CassandraSession]
+  }
+
+  class ZookeeperSessionDef(val zookeeperLocation: String,
+                            val zNode: String,
+                            val timeout: Int,
+                            val retryTime: Int) extends SessionDef
+                                                   with NodeCacheListener
+                                                   with ConnectionStateListener {
+
+    import org.apache.curator.framework.{CuratorFrameworkFactory, CuratorFramework}
+    import org.apache.curator.framework.api.CuratorEvent
+    import org.apache.curator.framework.state.ConnectionState
+    import org.apache.curator.retry.RetryUntilElapsed
     import com.datastax.driver.core.Cluster
+    import java.util.concurrent.Executors
+    import java.util.concurrent.TimeUnit.MILLISECONDS
 
-    val zk = CuratorFrameworkFactory.newClient(zookeeperLocation, new RetryForever(5000))
-    zk.start()
-
-    val nodeCache = new NodeCache(zk, "/cassandra")
-    nodeCache.getListenable().addListener(this)
-    nodeCache.start()
     val connectionPromise = Promise[CassandraSession]
     val connection = connectionPromise.future
+
+    val zk = CuratorFrameworkFactory.newClient(zookeeperLocation, new RetryUntilElapsed(timeout, retryTime))
+    zk.getConnectionStateListenable.addListener(this)
+
+    val nodeCache = new NodeCache(zk, zNode)
+    nodeCache.getListenable.addListener(this)
+    zk.start()
+
+    val scheduler = Executors.newScheduledThreadPool(1)
+    val connectionTimeout = new Runnable {
+      override def run(): Unit = {
+        val failed = connectionPromise tryFailure (new SlickException("Could not make initial connection to zookeeper to retrieve cassandra configuration"))
+        if (failed) {
+          zk.close()
+        }
+      }
+    }
+    scheduler.schedule(connectionTimeout, timeout, MILLISECONDS)
+
+    def stateChanged(client: CuratorFramework, newState: ConnectionState): Unit = newState match {
+      case ConnectionState.CONNECTED |
+           ConnectionState.RECONNECTED => nodeCache.start()
+      case ConnectionState.LOST |
+           ConnectionState.SUSPENDED   => nodeCache.close()
+      case ConnectionState.READ_ONLY   => // Don't care
+    }
 
     def nodeChanged: Unit = {
       def addNodes(builder: Cluster.Builder, nodes: Iterator[String]): Cluster.Builder = {
@@ -115,13 +171,12 @@ trait CassandraBackend extends RelationalBackend {
       val data = new String(nodeCache.getCurrentData.getData)
       val nodes = data.lines
       val cluster = addNodes(Cluster.builder, nodes).build
-      connectionPromise success cluster.connect
+      connectionPromise trySuccess cluster.connect
     }
 
     def close(): Unit = {
       if (connection.isCompleted)
         Await.result(connection, Duration.Zero).close()
-      nodeCache.close()
       zk.close()
     }
 
@@ -131,7 +186,7 @@ trait CassandraBackend extends RelationalBackend {
 
   /** The context object passed to database actions by the execution engine. */
   trait CassandraActionContext extends BasicActionContext {
-    def connection: CassandraSession = Await.result(session.connection, Duration(1, MINUTES))
+    def connection: CassandraSession = Await.result(session.connection, Duration.Inf) // Give Session control over failure timeout period
   }
 
   /** A special DatabaseActionContext for streaming execution. */
