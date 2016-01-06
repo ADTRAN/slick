@@ -58,12 +58,16 @@ trait CassandraBackend extends RelationalBackend {
     */
   def createDatabase(config: Config, path: String): Database = Database.forConfig(path, config)
 
-  /** A database instance to which connections can be created. */
-  class DatabaseDef(val executor: AsyncExecutor,
+  abstract class DatabaseDef extends super.DatabaseDef {
+  }
+
+  /** A database instance to which connections can be created, which uses
+    * zookeeper to keep track of the cassandra nodes. */
+  class ZookeeperDatabaseDef(val executor: AsyncExecutor,
     val zookeeperLocation: String,
     val zNode: String,
     val timeout: Int,
-    val retryTime: Int) extends super.DatabaseDef { this: Database =>
+    val retryTime: Int) extends DatabaseDef { this: Database =>
 
     /** Create a new session. The session needs to be closed explicitly by calling its close() method. */
     def createSession(): Session = {
@@ -86,9 +90,37 @@ trait CassandraBackend extends RelationalBackend {
     protected[this] def synchronousExecutionContext: ExecutionContext = executor.executionContext
   }
 
+  /** A database instance to which connections can be created, which takes a
+    * list of cassandra nodes directly. */
+  class DirectDatabaseDef(val executor: AsyncExecutor,
+    val nodes: List[String],
+    val timeout: Int,
+    val retryTime: Int) extends DatabaseDef { this: Database =>
+
+    /** Create a new session. The session needs to be closed explicitly by calling its close() method. */
+    def createSession(): Session = {
+      new DirectSessionDef(nodes, timeout, retryTime)
+    }
+
+    def close: Unit = {
+    }
+
+    /** Create the default DatabaseActionContext for this backend. */
+    protected[this] def createDatabaseActionContext[T](_useSameThread: Boolean): Context =
+      new CassandraActionContext { val useSameThread = _useSameThread }
+
+    /** Create the default StreamingDatabaseActionContext for this backend. */
+    protected[this] def createStreamingDatabaseActionContext[T](s: Subscriber[_ >: T], useSameThread: Boolean): StreamingContext =
+      new CassandraStreamingActionContext(s, useSameThread, this)
+
+    /** Return the default ExecutionContext for this Database which should be used for running
+      * SynchronousDatabaseActions for asynchronous execution. */
+    protected[this] def synchronousExecutionContext: ExecutionContext = executor.executionContext
+  }
+
   trait DatabaseFactoryDef {
     import com.typesafe.config.ConfigFactory
-    import scala.collection.JavaConversions.mapAsJavaMap
+    import scala.collection.convert.wrapAll._
 
     val defaults: Config = ConfigFactory.parseMap(Map(
       "zookeeper"          -> "127.0.0.1",
@@ -99,11 +131,17 @@ trait CassandraBackend extends RelationalBackend {
     def forConfig(path: String, config: Config): Database = {
       val usedConfig = if (path.isEmpty) config else config.getConfig(path)
       val fallbackConfig = usedConfig withFallback defaults
-      val zookeeperLocation = fallbackConfig.getString("zookeeper")
-      val zNode = fallbackConfig.getString("zNode")
       val timeout = fallbackConfig.getInt("timeout")
       val retryTime = fallbackConfig.getInt("retryTime")
-      new DatabaseDef(AsyncExecutor.default(), zookeeperLocation, zNode, timeout, retryTime)
+
+      if (fallbackConfig.hasPath("nodes")) {
+        val nodes = fallbackConfig.getStringList("nodes").toList
+        new DirectDatabaseDef(AsyncExecutor.default(), nodes, timeout, retryTime)
+      } else {
+        val zookeeperLocation = fallbackConfig.getString("zookeeper")
+        val zNode = fallbackConfig.getString("zNode")
+        new ZookeeperDatabaseDef(AsyncExecutor.default(), zookeeperLocation, zNode, timeout, retryTime)
+      }
     }
   }
 
@@ -111,7 +149,38 @@ trait CassandraBackend extends RelationalBackend {
   import org.apache.curator.framework.state.ConnectionStateListener
 
   abstract class SessionDef extends super.SessionDef {
+    import com.datastax.driver.core.Cluster
+
     val connection: Future[CassandraSession]
+
+    def buildCluster(nodes: Iterator[String]): Cluster = {
+      def addNodes(builder: Cluster.Builder, nodes: Iterator[String]): Cluster.Builder = {
+        if (nodes.hasNext) {
+          val Array(ip, port) = nodes.next().split(':')
+          addNodes(builder.addContactPoint(ip), nodes)
+        } else {
+          builder
+        }
+      }
+
+      addNodes(Cluster.builder, nodes).build
+    }
+  }
+
+  class DirectSessionDef(val nodes: List[String],
+                         val timeout: Int,
+                         val retryTime: Int) extends SessionDef {
+
+    val connectionPromise = Promise[CassandraSession]
+    val connection = connectionPromise.future
+    val cluster = buildCluster(nodes.iterator)
+    connectionPromise trySuccess cluster.connect
+
+    def close(): Unit = {
+    }
+
+    def force(): Unit = {
+    }
   }
 
   class ZookeeperSessionDef(val zookeeperLocation: String,
@@ -159,18 +228,9 @@ trait CassandraBackend extends RelationalBackend {
     }
 
     def nodeChanged: Unit = {
-      def addNodes(builder: Cluster.Builder, nodes: Iterator[String]): Cluster.Builder = {
-        if (nodes.hasNext) {
-          val Array(ip, port) = nodes.next().split(':')
-          addNodes(builder.addContactPoint(ip), nodes)
-        } else {
-          builder
-        }
-      }
-
       val data = new String(nodeCache.getCurrentData.getData)
       val nodes = data.lines
-      val cluster = addNodes(Cluster.builder, nodes).build
+      val cluster = buildCluster(nodes)
       connectionPromise trySuccess cluster.connect
     }
 
