@@ -138,104 +138,20 @@ trait CassandraBackend extends RelationalBackend {
     }
   }
 
-  import org.apache.curator.framework.recipes.cache.{NodeCache, NodeCacheListener}
-  import org.apache.curator.framework.state.ConnectionStateListener
+  trait SessionDef extends CassandraSessionDef with super.SessionDef
 
-  abstract class SessionDef extends super.SessionDef {
-    import com.datastax.driver.core.Cluster
+  class ZookeeperSessionDef (override val zookeeperLocation: String,
+                             override val zNode: String,
+                             override val timeout: Int,
+                             override val retryTime: Int)
+    extends ZookeeperSession(zookeeperLocation, zNode, timeout, retryTime)
+    with SessionDef
 
-    val connection: Future[CassandraSession]
-
-    def buildCluster(nodes: Iterator[String]): Cluster = {
-      def addNodes(builder: Cluster.Builder, nodes: Iterator[String]): Cluster.Builder = {
-        if (nodes.hasNext) {
-          val Array(ip, port) = nodes.next().split(':')
-          addNodes(builder.addContactPoint(ip), nodes)
-        } else {
-          builder
-        }
-      }
-
-      addNodes(Cluster.builder, nodes).build
-    }
-  }
-
-  class DirectSessionDef(val nodes: List[String],
-                         val timeout: Int,
-                         val retryTime: Int) extends SessionDef {
-
-    val connectionPromise = Promise[CassandraSession]
-    val connection = connectionPromise.future
-    val cluster = buildCluster(nodes.iterator)
-    connectionPromise trySuccess cluster.connect
-
-    def close(): Unit = {
-    }
-
-    def force(): Unit = {
-    }
-  }
-
-  class ZookeeperSessionDef(val zookeeperLocation: String,
-                            val zNode: String,
-                            val timeout: Int,
-                            val retryTime: Int) extends SessionDef
-                                                   with NodeCacheListener
-                                                   with ConnectionStateListener {
-
-    import org.apache.curator.framework.{CuratorFrameworkFactory, CuratorFramework}
-    import org.apache.curator.framework.api.CuratorEvent
-    import org.apache.curator.framework.state.ConnectionState
-    import org.apache.curator.retry.RetryUntilElapsed
-    import com.datastax.driver.core.Cluster
-    import java.util.concurrent.Executors
-    import java.util.concurrent.TimeUnit.MILLISECONDS
-
-    val connectionPromise = Promise[CassandraSession]
-    val connection = connectionPromise.future
-
-    val zk = CuratorFrameworkFactory.newClient(zookeeperLocation, new RetryUntilElapsed(timeout, retryTime))
-    zk.getConnectionStateListenable.addListener(this)
-
-    val nodeCache = new NodeCache(zk, zNode)
-    nodeCache.getListenable.addListener(this)
-    zk.start()
-
-    val scheduler = Executors.newScheduledThreadPool(1)
-    val connectionTimeout = new Runnable {
-      override def run(): Unit = {
-        val failed = connectionPromise tryFailure (new SlickException("Could not make initial connection to zookeeper to retrieve cassandra configuration"))
-        if (failed) {
-          zk.close()
-        }
-      }
-    }
-    scheduler.schedule(connectionTimeout, timeout, MILLISECONDS)
-
-    def stateChanged(client: CuratorFramework, newState: ConnectionState): Unit = newState match {
-      case ConnectionState.CONNECTED |
-           ConnectionState.RECONNECTED => nodeCache.start()
-      case ConnectionState.LOST |
-           ConnectionState.SUSPENDED   => nodeCache.close()
-      case ConnectionState.READ_ONLY   => // Don't care
-    }
-
-    def nodeChanged: Unit = {
-      val data = new String(nodeCache.getCurrentData.getData)
-      val nodes = data.lines
-      val cluster = buildCluster(nodes)
-      connectionPromise trySuccess cluster.connect
-    }
-
-    def close(): Unit = {
-      if (connection.isCompleted)
-        Await.result(connection, Duration.Zero).close()
-      zk.close()
-    }
-
-    def force(): Unit = {
-    }
-  }
+  class DirectSessionDef (override val nodes: List[String],
+                          override val timeout: Int,
+                          override val retryTime: Int)
+    extends    DirectSession(nodes, timeout, retryTime)
+    with SessionDef
 
   /** The context object passed to database actions by the execution engine. */
   trait CassandraActionContext extends BasicActionContext {
