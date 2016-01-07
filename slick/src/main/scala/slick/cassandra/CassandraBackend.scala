@@ -122,24 +122,17 @@ trait CassandraBackend extends RelationalBackend {
     import com.typesafe.config.ConfigFactory
     import scala.collection.convert.wrapAll._
 
-    val defaults: Config = ConfigFactory.parseMap(Map(
-      "zookeeper"          -> "127.0.0.1",
-      "zNode"              -> "/cassandra",
-      "timeout"   -> 60000,
-      "retryTime" -> 5000))
-
     def forConfig(path: String, config: Config): Database = {
       val usedConfig = if (path.isEmpty) config else config.getConfig(path)
-      val fallbackConfig = usedConfig withFallback defaults
-      val timeout = fallbackConfig.getInt("timeout")
-      val retryTime = fallbackConfig.getInt("retryTime")
+      val timeout = usedConfig.getInt("timeout")
+      val retryTime = usedConfig.getInt("retryTime")
 
-      if (fallbackConfig.hasPath("nodes")) {
-        val nodes = fallbackConfig.getStringList("nodes").toList
+      if (usedConfig.hasPath("nodes")) {
+        val nodes = usedConfig.getStringList("nodes").toList
         new DirectDatabaseDef(AsyncExecutor.default(), nodes, timeout, retryTime)
       } else {
-        val zookeeperLocation = fallbackConfig.getString("zookeeper")
-        val zNode = fallbackConfig.getString("zNode")
+        val zookeeperLocation = usedConfig.getString("zookeeper")
+        val zNode = usedConfig.getString("zNode")
         new ZookeeperDatabaseDef(AsyncExecutor.default(), zookeeperLocation, zNode, timeout, retryTime)
       }
     }
