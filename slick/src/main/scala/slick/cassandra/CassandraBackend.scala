@@ -44,8 +44,8 @@ trait CassandraBackend extends RelationalBackend {
     *                     of the cassandra nodes.  Must specify either 'nodes'
     *                     or 'zookeeper', but not both.  Default is to use
     *                     zookeeper.
-    * zookeeper:          IPv4 address pointing to zookeeper instance with
-    *                     cassandra config.  Defaults to '127.0.0.1'
+    * zookeeper:          IPv4 address:port pointing to zookeeper instance with
+    *                     cassandra config.  Defaults to '127.0.0.1:2181'
     * zNode:              zNode containing location of cassandra nodes in
     *                     zookeeper. defaults to '/cassandra'
     * timeout:            milliseconds to wait for connection before aborting.

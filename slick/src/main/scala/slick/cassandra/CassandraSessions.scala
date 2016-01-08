@@ -17,7 +17,7 @@ abstract class CassandraSessionDef {
     def addNodes(builder: Cluster.Builder, nodes: Iterator[String]): Cluster.Builder = {
       if (nodes.hasNext) {
         val Array(ip, port) = nodes.next().split(':')
-        addNodes(builder.addContactPoint(ip), nodes)
+        addNodes(builder.addContactPoint(ip).withPort(port.toInt), nodes)
       } else {
         builder
       }
