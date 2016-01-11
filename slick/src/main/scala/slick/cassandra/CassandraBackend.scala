@@ -21,21 +21,21 @@ import slick.SlickException
 import slick.dbio._
 import slick.util._
 
-trait CassandraBackend extends RelationalBackend {
+trait CassandraBackend extends RelationalBackend
+                          with CassandraDatabaseFactory
+                          with CassandraDatabases {
 
   type This = CassandraBackend
   type Database = DatabaseDef
   type DatabaseFactory = DatabaseFactoryDef
   type Context = CassandraActionContext
   type StreamingContext = CassandraStreamingActionContext
+  val backend: CassandraBackend = this
 
   // This is a session in the Slick sense, not in the Cassandra/Datastax sense.
   type Session = SessionDef
-  // For convenience working inside this file.
-  type CassandraSession = com.datastax.driver.core.Session
 
   val Database: DatabaseFactory = new DatabaseFactoryDef {}
-  val backend: CassandraBackend = this
 
   /** Create a Database instance through [[https://github.com/typesafehub/config Typesafe Config]].
     * This method is used by `DatabaseConfig`.
@@ -58,85 +58,26 @@ trait CassandraBackend extends RelationalBackend {
     */
   def createDatabase(config: Config, path: String): Database = Database.forConfig(path, config)
 
-  abstract class DatabaseDef extends super.DatabaseDef {
-  }
-
-  /** A database instance to which connections can be created, which uses
-    * zookeeper to keep track of the cassandra nodes. */
-  class ZookeeperDatabaseDef(val executor: AsyncExecutor,
-    val zookeeperLocation: String,
-    val zNode: String,
-    val timeout: Int,
-    val retryTime: Int) extends DatabaseDef { this: Database =>
-
-    /** Create a new session. The session needs to be closed explicitly by calling its close() method. */
-    def createSession(): Session = {
-      new ZookeeperSessionDef(zookeeperLocation, zNode, timeout, retryTime)
-    }
-
-    def close: Unit = {
-    }
-
-    /** Create the default DatabaseActionContext for this backend. */
-    protected[this] def createDatabaseActionContext[T](_useSameThread: Boolean): Context =
-      new CassandraActionContext { val useSameThread = _useSameThread }
-
+  trait DatabaseDef extends CassandraDatabase with super.DatabaseDef {
     /** Create the default StreamingDatabaseActionContext for this backend. */
     protected[this] def createStreamingDatabaseActionContext[T](s: Subscriber[_ >: T], useSameThread: Boolean): StreamingContext =
       new CassandraStreamingActionContext(s, useSameThread, this)
-
-    /** Return the default ExecutionContext for this Database which should be used for running
-      * SynchronousDatabaseActions for asynchronous execution. */
-    protected[this] def synchronousExecutionContext: ExecutionContext = executor.executionContext
   }
 
-  /** A database instance to which connections can be created, which takes a
-    * list of cassandra nodes directly. */
-  class DirectDatabaseDef(val executor: AsyncExecutor,
-    val nodes: List[String],
-    val timeout: Int,
-    val retryTime: Int) extends DatabaseDef { this: Database =>
+  class ZookeeperDatabaseDef(override val executor: AsyncExecutor,
+                             override val zookeeperLocation: String,
+                             override val zNode: String,
+                             override val timeout: Int,
+                             override val retryTime: Int)
+    extends ZookeeperDatabase(executor, zookeeperLocation, zNode, timeout, retryTime)
+    with DatabaseDef
 
-    /** Create a new session. The session needs to be closed explicitly by calling its close() method. */
-    def createSession(): Session = {
-      new DirectSessionDef(nodes, timeout, retryTime)
-    }
-
-    def close: Unit = {
-    }
-
-    /** Create the default DatabaseActionContext for this backend. */
-    protected[this] def createDatabaseActionContext[T](_useSameThread: Boolean): Context =
-      new CassandraActionContext { val useSameThread = _useSameThread }
-
-    /** Create the default StreamingDatabaseActionContext for this backend. */
-    protected[this] def createStreamingDatabaseActionContext[T](s: Subscriber[_ >: T], useSameThread: Boolean): StreamingContext =
-      new CassandraStreamingActionContext(s, useSameThread, this)
-
-    /** Return the default ExecutionContext for this Database which should be used for running
-      * SynchronousDatabaseActions for asynchronous execution. */
-    protected[this] def synchronousExecutionContext: ExecutionContext = executor.executionContext
-  }
-
-  trait DatabaseFactoryDef {
-    import com.typesafe.config.ConfigFactory
-    import scala.collection.convert.wrapAll._
-
-    def forConfig(path: String, config: Config): Database = {
-      val usedConfig = if (path.isEmpty) config else config.getConfig(path)
-      val timeout = usedConfig.getInt("timeout")
-      val retryTime = usedConfig.getInt("retryTime")
-
-      if (usedConfig.hasPath("nodes")) {
-        val nodes = usedConfig.getStringList("nodes").toList
-        new DirectDatabaseDef(AsyncExecutor.default(), nodes, timeout, retryTime)
-      } else {
-        val zookeeperLocation = usedConfig.getString("zookeeper")
-        val zNode = usedConfig.getString("zNode")
-        new ZookeeperDatabaseDef(AsyncExecutor.default(), zookeeperLocation, zNode, timeout, retryTime)
-      }
-    }
-  }
+  class DirectDatabaseDef(override val executor: AsyncExecutor,
+                          override val nodes: List[String],
+                          override val timeout: Int,
+                          override val retryTime: Int)
+    extends DirectDatabase(executor, nodes, timeout, retryTime)
+    with DatabaseDef
 
   trait SessionDef extends CassandraSessionDef with super.SessionDef
 
@@ -155,7 +96,7 @@ trait CassandraBackend extends RelationalBackend {
 
   /** The context object passed to database actions by the execution engine. */
   trait CassandraActionContext extends BasicActionContext {
-    def connection: CassandraSession = Await.result(session.connection, Duration.Inf) // Give Session control over failure timeout period
+    def connection: com.datastax.driver.core.Session = Await.result(session.connection, Duration.Inf) // Give Session control over failure timeout period
   }
 
   /** A special DatabaseActionContext for streaming execution. */
