@@ -5,15 +5,15 @@ import scala.concurrent.{Promise, ExecutionContext, Future, Await}
 import com.datastax.driver.core.Session
 import slick.SlickException
 import scala.concurrent.duration._
+import com.datastax.driver.core.Cluster
 
 abstract class CassandraSessionDef {
-  import com.datastax.driver.core.Cluster
 
   val connection: Future[Session]
   def close(): Unit
   def force(): Unit
 
-  def buildCluster(nodes: Iterator[String]): Cluster = {
+  def buildCluster(nodes: Iterator[String], builder: Cluster.Builder): Cluster = {
     def addNodes(builder: Cluster.Builder, nodes: Iterator[String]): Cluster.Builder = {
       if (nodes.hasNext) {
         val Array(ip, port) = nodes.next().split(':')
@@ -23,18 +23,21 @@ abstract class CassandraSessionDef {
       }
     }
 
-    addNodes(Cluster.builder, nodes).build
+    addNodes(builder, nodes).build
   }
 }
 
 class DirectSession(val nodes: List[String],
-  val timeout: Int,
-  val retryTime: Int) extends CassandraSessionDef {
+  val builder: Cluster.Builder = Cluster.builder) extends CassandraSessionDef {
 
   val connectionPromise = Promise[Session]
   val connection = connectionPromise.future
-  val cluster = buildCluster(nodes.iterator)
-  connectionPromise trySuccess cluster.connect
+  try {
+    val cluster = buildCluster(nodes.iterator, builder)
+    connectionPromise trySuccess cluster.connect
+  } catch {
+    case e: Exception => connectionPromise tryFailure e
+  }
 
   def close(): Unit = {
   }
@@ -46,7 +49,8 @@ class DirectSession(val nodes: List[String],
 class ZookeeperSession(val zookeeperLocation: String,
   val zNode: String,
   val timeout: Int,
-  val retryTime: Int) extends CassandraSessionDef
+  val retryTime: Int,
+  val builder: Cluster.Builder = Cluster.builder) extends CassandraSessionDef
                          with NodeCacheListener
                          with ConnectionStateListener {
 
@@ -90,7 +94,7 @@ class ZookeeperSession(val zookeeperLocation: String,
   def nodeChanged: Unit = {
     val data = new String(nodeCache.getCurrentData.getData)
     val nodes = data.lines
-    val cluster = buildCluster(nodes)
+    val cluster = buildCluster(nodes, builder)
     connectionPromise trySuccess cluster.connect
   }
 

@@ -27,6 +27,7 @@ object SlickBuild extends Build {
       val v = if(scalaVersion == "2.12.0-M2") "2.2.5-M2" else "2.2.4"
       "org.scalatest" %% "scalatest" % v
     }
+    val scalaMock = "org.scalamock" %% "scalamock-scalatest-support" % "3.2" % "test"
     val slf4j = "org.slf4j" % "slf4j-api" % "1.7.10"
     val logback = "ch.qos.logback" % "logback-classic" % "1.1.3"
     val typesafeConfig = "com.typesafe" % "config" % "1.2.1"
@@ -251,6 +252,8 @@ object SlickBuild extends Build {
       //scalacOptions in Compile += "-Yreify-copypaste",
       libraryDependencies ++=
         Dependencies.junit ++:
+        Dependencies.scalaTestFor(scalaVersion.value) +:
+        Dependencies.scalaMock +:
         (Dependencies.reactiveStreamsTCK % "test") +:
         (Dependencies.logback +: Dependencies.testDBs).map(_ % "test") ++:
         (Dependencies.logback +: Dependencies.testDBs).map(_ % "codegen"),

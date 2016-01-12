@@ -42,7 +42,7 @@ trait CassandraDatabases {self: CassandraBackend =>
 
     /** Create a new session. The session needs to be closed explicitly by calling its close() method. */
     def createSession(): Session = {
-      new DirectSessionDef(nodes, timeout, retryTime)
+      new DirectSessionDef(nodes)
     }
 
     def close: Unit = {

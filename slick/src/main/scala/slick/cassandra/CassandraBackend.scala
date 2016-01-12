@@ -88,10 +88,8 @@ trait CassandraBackend extends RelationalBackend
     extends ZookeeperSession(zookeeperLocation, zNode, timeout, retryTime)
     with SessionDef
 
-  class DirectSessionDef (override val nodes: List[String],
-                          override val timeout: Int,
-                          override val retryTime: Int)
-    extends    DirectSession(nodes, timeout, retryTime)
+  class DirectSessionDef (override val nodes: List[String])
+    extends    DirectSession(nodes)
     with SessionDef
 
   /** The context object passed to database actions by the execution engine. */
