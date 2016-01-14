@@ -32,12 +32,8 @@ class DirectSession(val nodes: List[String],
 
   val connectionPromise = Promise[Session]
   val connection = connectionPromise.future
-  try {
-    val cluster = buildCluster(nodes.iterator, builder)
-    connectionPromise trySuccess cluster.connect
-  } catch {
-    case e: Exception => connectionPromise tryFailure e
-  }
+  val cluster = buildCluster(nodes.iterator, builder)
+  connectionPromise trySuccess cluster.connect
 
   def close(): Unit = {
   }
@@ -46,36 +42,53 @@ class DirectSession(val nodes: List[String],
   }
 }
 
+import org.apache.curator.framework.{CuratorFrameworkFactory, CuratorFramework}
+import org.apache.curator.RetryPolicy
+
 class ZookeeperSession(val zookeeperLocation: String,
   val zNode: String,
   val timeout: Int,
   val retryTime: Int,
-  val builder: Cluster.Builder = Cluster.builder) extends CassandraSessionDef
+  val builder: Cluster.Builder = Cluster.builder,
+  val newClient: (String, RetryPolicy) => CuratorFramework = CuratorFrameworkFactory.newClient _,
+  val newNodeCache: (CuratorFramework, String) => NodeCache = (x, y) => new NodeCache(x, y)) extends CassandraSessionDef
                          with NodeCacheListener
                          with ConnectionStateListener {
 
-  import org.apache.curator.framework.{CuratorFrameworkFactory, CuratorFramework}
   import org.apache.curator.framework.api.CuratorEvent
   import org.apache.curator.framework.state.ConnectionState
   import org.apache.curator.retry.RetryUntilElapsed
   import com.datastax.driver.core.Cluster
   import java.util.concurrent.Executors
   import java.util.concurrent.TimeUnit.MILLISECONDS
+  import java.net.InetAddress
+
+  def validateInetAddress(ipAndPort: String, message: String): Unit = {
+    val Array(ip, port) = ipAndPort.split(':')
+    try {
+      InetAddress.getByName(ip)
+      port.toInt
+    } catch {
+      case e: Exception => throw new SlickException(s"Incorrect format for $message address.  Must be address:port")
+    }
+  }
 
   val connectionPromise = Promise[Session]
   val connection = connectionPromise.future
 
-  val zk = CuratorFrameworkFactory.newClient(zookeeperLocation, new RetryUntilElapsed(timeout, retryTime))
+  validateInetAddress(zookeeperLocation, "zookeeper")
+
+  val zk = newClient(zookeeperLocation, new RetryUntilElapsed(timeout, retryTime))
   zk.getConnectionStateListenable.addListener(this)
 
-  val nodeCache = new NodeCache(zk, zNode)
+  val nodeCache = newNodeCache(zk, zNode)
   nodeCache.getListenable.addListener(this)
   zk.start()
 
   val scheduler = Executors.newScheduledThreadPool(1)
   val connectionTimeout = new Runnable {
     override def run(): Unit = {
-      val failed = connectionPromise tryFailure (new SlickException("Could not make initial connection to zookeeper to retrieve cassandra configuration"))
+      val failed = connectionPromise tryFailure (new SlickException("Initial connection to zookeeper or cassandra timed out"))
       if (failed) {
         zk.close()
       }
@@ -93,9 +106,15 @@ class ZookeeperSession(val zookeeperLocation: String,
 
   def nodeChanged: Unit = {
     val data = new String(nodeCache.getCurrentData.getData)
-    val nodes = data.lines
-    val cluster = buildCluster(nodes, builder)
-    connectionPromise trySuccess cluster.connect
+    try {
+      data.lines foreach {node => validateInetAddress(node, "cassandra")}
+      val cluster = buildCluster(data.lines, builder)
+      connectionPromise success cluster.connect
+    } catch {
+      case e: SlickException        => connectionPromise tryFailure e
+      case e: IllegalStateException => throw new SlickException("Changing cassandra's zNode while a connection is in use is not currently supported.")
+      case e: Throwable             => throw new SlickException("Unknown exception retrieving cassandra configuration from zookeeper:" + e.getMessage)
+    }
   }
 
   def close(): Unit = {
