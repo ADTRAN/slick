@@ -3,6 +3,7 @@ import com.typesafe.config.Config
 import com.typesafe.config.ConfigFactory
 import scala.collection.convert.wrapAll._
 import slick.util.AsyncExecutor
+import slick.SlickException
 
 trait CassandraDatabaseFactory {self: CassandraBackend =>
   trait DatabaseFactoryDef {
@@ -11,6 +12,9 @@ trait CassandraDatabaseFactory {self: CassandraBackend =>
       val usedConfig = if (path.isEmpty) config else config.getConfig(path)
       val timeout = usedConfig.getInt("timeout")
       val retryTime = usedConfig.getInt("retryTime")
+
+      if (usedConfig.hasPath("nodes") && usedConfig.hasPath("zookeeper"))
+        throw new SlickException("Config cannot contain both zookeeper node and direct cassandra entries.")
 
       if (usedConfig.hasPath("nodes")) {
         val nodes = usedConfig.getStringList("nodes").toList
