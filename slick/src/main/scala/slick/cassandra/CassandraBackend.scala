@@ -42,8 +42,7 @@ trait CassandraBackend extends RelationalBackend
     * Supported config keys:
     * nodes:              Array of "IPv4 address:port" containing the location
     *                     of the cassandra nodes.  Must specify either 'nodes'
-    *                     or 'zookeeper', but not both.  Default is to use
-    *                     zookeeper.
+    *                     or 'zookeeper', but not both.
     * zookeeper:          IPv4 address:port pointing to zookeeper instance with
     *                     cassandra config.  Defaults to '127.0.0.1:2181'
     * zNode:              zNode containing location of cassandra nodes in
