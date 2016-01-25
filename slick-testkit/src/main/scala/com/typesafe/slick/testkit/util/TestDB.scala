@@ -18,6 +18,7 @@ import slick.SlickException
 import slick.basic.{BasicProfile, Capability}
 import slick.dbio.{NoStream, DBIOAction, DBIO}
 import slick.jdbc.{JdbcProfile, ResultSetAction, JdbcDataSource, SimpleJdbcAction}
+import slick.cassandra.CassandraProfile
 import slick.jdbc.GetResult._
 import slick.relational.RelationalProfile
 import slick.sql.SqlProfile
@@ -136,6 +137,10 @@ trait TestDB {
 
   /** The tests to run for this configuration. */
   def testClasses: Seq[Class[_ <: GenericTest[_ >: Null <: TestDB]]] = TestkitConfig.testClasses
+}
+
+trait CassandraTestDB extends TestDB {
+  type Profile = CassandraProfile
 }
 
 trait RelationalTestDB extends TestDB {

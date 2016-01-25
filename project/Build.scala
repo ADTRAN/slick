@@ -27,6 +27,7 @@ object SlickBuild extends Build {
       val v = if(scalaVersion == "2.12.0-M2") "2.2.5-M2" else "2.2.4"
       "org.scalatest" %% "scalatest" % v
     }
+    val scalaMock = "org.scalamock" %% "scalamock-scalatest-support" % "3.2" % "test"
     val slf4j = "org.slf4j" % "slf4j-api" % "1.7.10"
     val logback = "ch.qos.logback" % "logback-classic" % "1.1.3"
     val typesafeConfig = "com.typesafe" % "config" % "1.2.1"
@@ -34,10 +35,13 @@ object SlickBuild extends Build {
     val reactiveStreams = "org.reactivestreams" % "reactive-streams" % reactiveStreamsVersion
     val reactiveStreamsTCK = "org.reactivestreams" % "reactive-streams-tck" % reactiveStreamsVersion
     val hikariCP = "com.zaxxer" % "HikariCP-java6" % "2.3.7"
-    val mainDependencies = Seq(slf4j, typesafeConfig, reactiveStreams)
+    val cassandra = "com.datastax.cassandra" % "cassandra-driver-core" % "2.2.0-rc3"
+    val curator = "org.apache.curator" % "curator-recipes" % "2.9.1"
+    val mainDependencies = Seq(slf4j, typesafeConfig, reactiveStreams, cassandra, curator)
     val h2 = "com.h2database" % "h2" % "1.4.187"
     val testDBs = Seq(
       h2,
+      cassandra,
       "org.xerial" % "sqlite-jdbc" % "3.8.7",
       "org.apache.derby" % "derby" % "10.9.1.0",
       "org.hsqldb" % "hsqldb" % "2.2.8",
@@ -248,6 +252,8 @@ object SlickBuild extends Build {
       //scalacOptions in Compile += "-Yreify-copypaste",
       libraryDependencies ++=
         Dependencies.junit ++:
+        Dependencies.scalaTestFor(scalaVersion.value) +:
+        Dependencies.scalaMock +:
         (Dependencies.reactiveStreamsTCK % "test") +:
         (Dependencies.logback +: Dependencies.testDBs).map(_ % "test") ++:
         (Dependencies.logback +: Dependencies.testDBs).map(_ % "codegen"),
@@ -329,7 +335,7 @@ object SlickBuild extends Build {
     settings(sharedSettings:_*)
     settings(
       name := "Slick-OsgiTests",
-      libraryDependencies ++= (Dependencies.h2 +: Dependencies.logback +: Dependencies.junit ++: Dependencies.reactiveStreams +: Dependencies.paxExam).map(_ % "test"),
+      libraryDependencies ++= (Dependencies.h2 +: Dependencies.cassandra +: Dependencies.logback +: Dependencies.junit ++: Dependencies.reactiveStreams +: Dependencies.paxExam).map(_ % "test"),
       unmanagedResourceDirectories in Test += (baseDirectory in aRootProject).value / "common-test-resources",
       fork in Test := true,
       testOptions += Tests.Argument(TestFrameworks.JUnit, "-q", "-v", "-s", "-a"),

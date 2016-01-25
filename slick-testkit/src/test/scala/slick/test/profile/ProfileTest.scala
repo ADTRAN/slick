@@ -38,3 +38,6 @@ class MySQLTest extends ProfileTest(StandardTestDBs.MySQL)
 
 @RunWith(classOf[Testkit])
 class HeapTest extends ProfileTest(StandardTestDBs.Heap)
+
+@RunWith(classOf[Testkit])
+class CassandraTest extends ProfileTest(StandardTestDBs.Cassandra)
