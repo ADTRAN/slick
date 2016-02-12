@@ -40,7 +40,7 @@ are added through implicit conversions defined in
 the classes ``AnyExtensionMethods``, ``ColumnExtensionMethods``,
 ``NumericColumnExtensionMethods``, ``BooleanColumnExtensionMethods`` and
 ``StringColumnExtensionMethods``
-(cf. :slick:`ExtensionMethods <src/main/scala/slick/lifted/ExtensionMethods.scala>`).
+(cf. :slick:`ExtensionMethods <slick/src/main/scala/slick/lifted/ExtensionMethods.scala>`).
 
 .. warning::
    Most operators mimic the plain Scala equivalents, but you have to use ``===`` instead of
@@ -219,10 +219,14 @@ Deleting
 Deleting works very similarly to querying. You write a query which selects the
 rows to delete and then get an Action by calling the ``delete`` method on it:
 
-.. includecode:: code/LiftedEmbedding.scala#delete
+.. includecode:: code/LiftedEmbedding.scala#delete1
 
-A query for deleting must only select from a single table. Any projection is
-ignored (it always deletes full rows).
+A query for deleting must only use a single table - no joins are allowed (Slick does not yet support
+the ``USING`` keyword for deletes). Any projection is ignored (it always deletes full rows).
+
+If you need to perform a join, you can ``filter`` based on another ``Query``:
+
+.. includecode:: code/LiftedEmbedding.scala#delete2
 
 .. index:: insert, +=, ++=, InsertInvoker, insertStatement
 
