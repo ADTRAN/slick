@@ -7,12 +7,19 @@ class TableCreationTest extends AsyncTest[CassandraTestDB] {
 
   def testTableCreation = {
     class TestTable(tag: Tag) extends Table[Int](tag, "TEST") {
-      def id = column[Int]("ID")
+      def id = column[Int]("ID", O.PrimaryKey)
       def * = id
     }
     val testTable = TableQuery(new TestTable(_))
+    val check = "SELECT * FROM TEST;"
+    val cleanup = "DROP TABLE TEST;"
+    val checkAction = SimpleDBIO(_.connection.execute(check))
+    val cleanupAction = SimpleDBIO(_.connection.execute(cleanup))
+
     for {
       _ <- testTable.schema.create
+      _ <- checkAction
+      _ <- cleanupAction
     } yield ()
   }
 }

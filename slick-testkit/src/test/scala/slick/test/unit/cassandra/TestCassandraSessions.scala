@@ -1,19 +1,18 @@
 package test.scala.slick.test.unit.cassandra
 import org.scalatest._
-import org.scalatest.concurrent.ScalaFutures._
-import org.scalatest.concurrent.AsyncAssertions.Waiter
+import org.scalatest.Matchers._
+import org.scalatest.concurrent.ScalaFutures
 import time.SpanSugar._
 import org.scalamock.scalatest.MockFactory
 import slick.cassandra._
 import com.datastax.driver.core.{Cluster, Session, AbstractSession, Configuration}
 import com.datastax.driver.core.exceptions._
-import scala.util.{Success, Failure}
 import scala.concurrent.ExecutionContext.Implicits.global
 import org.apache.curator.framework.state.ConnectionState
 import slick.SlickException
 import scala.concurrent.Await
 
-class CassandraSessionTests extends WordSpec with MockFactory {
+class CassandraSessionTests extends WordSpec with MockFactory with ScalaFutures {
 
   class MockableCluster extends Cluster(null, null, null)
 
@@ -71,11 +70,14 @@ class CassandraSessionTests extends WordSpec with MockFactory {
         shouldThrowNoHostAvailable = true
       }
 
+      val map = new java.util.HashMap[java.net.InetSocketAddress, Throwable]()
       if (shouldThrowNoHostAvailable) {
-        val map = new java.util.HashMap[java.net.InetSocketAddress, Throwable]()
         (cluster.connect _) when() throws new NoHostAvailableException(map)
+        (cluster.connect(_: String)) when("slicktest") throws new NoHostAvailableException(map)
       } else {
         (cluster.connect _) when() returns new MockSession
+        (cluster.connect(_: String)) when("slicktest") returns new MockSession
+        (cluster.connect(_: String)) when("invalid") throws new NoHostAvailableException(map)
       }
 
       cluster
@@ -126,10 +128,9 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "return a successful future" in {
         val builder  = new MockClusterBuilder
 
-        val session = new DirectSession(List("127.0.0.1:9042"), builder)
+        val session = new DirectSession(List("127.0.0.1:9042"), Some("slicktest"), builder)
         assert(session.connection.isReadyWithin(100 millis))
       }
-
     }
 
     "given an invalid node" should {
@@ -137,7 +138,7 @@ class CassandraSessionTests extends WordSpec with MockFactory {
         val builder = new MockClusterBuilder
 
         intercept[IllegalArgumentException] {
-          val session = new DirectSession(List("500.0.0.2:9042"), builder)
+          val session = new DirectSession(List("500.0.0.2:9042"), Some("slicktest"), builder)
         }
       }
     }
@@ -147,7 +148,7 @@ class CassandraSessionTests extends WordSpec with MockFactory {
         val builder = new MockClusterBuilder
 
         intercept[NoHostAvailableException] {
-          val session = new DirectSession(List("127.0.0.2:9042"), builder)
+          val session = new DirectSession(List("127.0.0.2:9042"), Some("slicktest"), builder)
         }
       }
     }
@@ -157,7 +158,26 @@ class CassandraSessionTests extends WordSpec with MockFactory {
         val builder = new MockClusterBuilder
 
         intercept[NoHostAvailableException] {
-          val session = new DirectSession(List(), builder)
+          val session = new DirectSession(List(), Some("slicktest"), builder)
+        }
+      }
+    }
+
+    "given a valid node but no keyspace" should {
+      "return a successful future" in {
+        val builder  = new MockClusterBuilder
+
+        val session = new DirectSession(List("127.0.0.1:9042"), None, builder)
+        assert(session.connection.isReadyWithin(100 millis))
+      }
+    }
+
+    "given a valid node but an invalid keyspace" should {
+      "throw an NoHostAvailableException" in {
+        val builder = new MockClusterBuilder
+
+        intercept[NoHostAvailableException] {
+          val session = new DirectSession(List("127.0.0.1:9042"), Some("invalid"), builder)
         }
       }
     }
@@ -168,7 +188,7 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "return a successful future" in {
         val builder  = new MockClusterBuilder
 
-        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", 10, 1, builder, mockNewClient, mockNodeCache)
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", Some("slicktest"), 10000, 100, builder, mockNewClient, mockNodeCache)
         session.stateChanged(mockFramework, ConnectionState.CONNECTED)
         session.nodeChanged()
         assert(session.connection.isReadyWithin(100 millis))
@@ -179,9 +199,10 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "throw a SlickException" in {
         val builder  = new MockClusterBuilder
 
-        intercept[SlickException] {
-          val session = new ZookeeperSession("500.0.0.1:2181", "/cassandra", 10, 1, builder, mockNewClient, mockNodeCache)
+        val thrown = intercept[SlickException] {
+          val session = new ZookeeperSession("500.0.0.1:2181", "/cassandra", Some("slicktest"), 10000, 100, builder, mockNewClient, mockNodeCache)
         }
+        thrown.getMessage should startWith ("Incorrect format for zookeeper address.")
       }
     }
 
@@ -189,14 +210,10 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "fail the connection future with SlickException" in {
         val builder = new MockClusterBuilder
 
-        val session = new ZookeeperSession("192.168.0.1:2181", "/cassandra", 10, 1, builder, mockNewClient, mockNodeCache)
-        val w = new Waiter
-        session.connection onComplete {
-          case Failure(e) => w(throw e); w.dismiss()
-          case Success(_) => w.dismiss()
-        }
-        intercept[SlickException] {
-          w.await
+        val session = new ZookeeperSession("192.168.0.1:2181", "/cassandra", Some("slicktest"), 10, 1, builder, mockNewClient, mockNodeCache)
+        whenReady(session.connection.failed) {e =>
+          e shouldBe a [SlickException]
+          e.getMessage should startWith ("Initial connection to zookeeper or cassandra timed out")
         }
       }
     }
@@ -205,15 +222,11 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "fail the connection future with SlickException" in {
         val builder = new MockClusterBuilder
 
-        val session = new ZookeeperSession("127.0.0.1:2181", "/cassondry", 10, 1, builder, mockNewClient, mockNodeCache)
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassondry", Some("slicktest"), 10, 1, builder, mockNewClient, mockNodeCache)
         session.stateChanged(mockFramework, ConnectionState.CONNECTED)
-        val w = new Waiter
-        session.connection onComplete {
-          case Failure(e) => w(throw e); w.dismiss()
-          case Success(_) => w.dismiss()
-        }
-        intercept[SlickException] {
-          w.await
+        whenReady(session.connection.failed) {e =>
+          e shouldBe a [SlickException]
+          e.getMessage should startWith ("Initial connection to zookeeper or cassandra timed out")
         }
       }
     }
@@ -222,16 +235,12 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "fail the connection future with SlickException" in {
         val builder = new MockClusterBuilder
 
-        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", 10, 1, builder, mockNewClient, invalidMockNodeCache)
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", Some("slicktest"), 10000, 100, builder, mockNewClient, invalidMockNodeCache)
         session.stateChanged(mockFramework, ConnectionState.CONNECTED)
         session.nodeChanged()
-        val w = new Waiter
-        session.connection onComplete {
-          case Failure(e) => w(throw e); w.dismiss()
-          case Success(_) => w.dismiss()
-        }
-        intercept[SlickException] {
-          w.await
+        whenReady(session.connection.failed) {e =>
+          e shouldBe a [SlickException]
+          e.getMessage should startWith ("Incorrect format for cassandra address.")
         }
       }
     }
@@ -240,12 +249,13 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "throw a SlickException" in {
         val builder = new MockClusterBuilder
 
-        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", 10, 1, builder, mockNewClient, mockNodeCache)
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", Some("slicktest"), 10000, 100, builder, mockNewClient, mockNodeCache)
         session.stateChanged(mockFramework, ConnectionState.CONNECTED)
         session.nodeChanged()
-        intercept[SlickException] {
+        val thrown = intercept[SlickException] {
           session.nodeChanged()
         }
+        thrown.getMessage should startWith ("Changing cassandra's zNode while a connection is in use is not currently supported.")
       }
     }
 
@@ -253,14 +263,10 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "fail the connection future with a SlickException" in {
         val builder = new MockClusterBuilder
 
-        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", 10, 1, builder, mockNewClient, mockNodeCache)
-        val w = new Waiter
-        session.connection onComplete {
-          case Failure(e) => w(throw e); w.dismiss()
-          case Success(_) => w.dismiss()
-        }
-        intercept[SlickException] {
-          w.await
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", Some("slicktest"), 10, 1, builder, mockNewClient, mockNodeCache)
+        whenReady(session.connection.failed) {e =>
+          e shouldBe a [SlickException]
+          e.getMessage should startWith ("Initial connection to zookeeper or cassandra timed out")
         }
       }
     }
@@ -269,15 +275,11 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "fail the connection future with a SlickException" in {
         val builder = new MockClusterBuilder
 
-        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", 10, 1, builder, mockNewClient, mockNodeCache)
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", Some("slicktest"), 10, 1, builder, mockNewClient, mockNodeCache)
         session.stateChanged(mockFramework, ConnectionState.CONNECTED)
-        val w = new Waiter
-        session.connection onComplete {
-          case Failure(e) => w(throw e); w.dismiss()
-          case Success(_) => w.dismiss()
-        }
-        intercept[SlickException] {
-          w.await
+        whenReady(session.connection.failed) {e =>
+          e shouldBe a [SlickException]
+          e.getMessage should startWith ("Initial connection to zookeeper or cassandra timed out")
         }
       }
     }
@@ -286,7 +288,7 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "close a completed cassandra connection" in {
         val builder = new MockClusterBuilder
 
-        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", 10, 1, builder, mockNewClient, mockNodeCache)
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", Some("slicktest"), 10000, 100, builder, mockNewClient, mockNodeCache)
         session.stateChanged(mockFramework, ConnectionState.CONNECTED)
         session.nodeChanged()
         session.close()
@@ -296,13 +298,38 @@ class CassandraSessionTests extends WordSpec with MockFactory {
       "close the zookeeper connection" in {
         val builder = new MockClusterBuilder
 
-        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", 10, 1, builder, mockNewClient, mockNodeCache)
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", Some("slicktest"), 10000, 100, builder, mockNewClient, mockNodeCache)
         session.stateChanged(mockFramework, ConnectionState.CONNECTED)
         session.nodeChanged()
         session.close()
         var closed = false
         (mockFramework.close _) when() returns({closed = true})
         assert(closed)
+      }
+    }
+
+    "given a valid zookeeper address with a valid cassandra zNode but no keyspace" should {
+      "return a successful future" in {
+        val builder  = new MockClusterBuilder
+
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", None, 10000, 100, builder, mockNewClient, mockNodeCache)
+        session.stateChanged(mockFramework, ConnectionState.CONNECTED)
+        session.nodeChanged()
+        assert(session.connection.isReadyWithin(100 millis))
+      }
+    }
+
+    "given a valid zookeeper address with a valid cassandra zNode but an invalid keyspace" should {
+      "fail the connection future with a SlickException" in {
+        val builder  = new MockClusterBuilder
+
+        val session = new ZookeeperSession("127.0.0.1:2181", "/cassandra", Some("invalid"), 10000, 100, builder, mockNewClient, mockNodeCache)
+        session.stateChanged(mockFramework, ConnectionState.CONNECTED)
+        session.nodeChanged()
+        whenReady(session.connection.failed) {e =>
+          e shouldBe a [SlickException]
+          e.getMessage should startWith ("Host addresses or keyspace incorrect or unreachable connecting to cassandra")
+        }
       }
     }
   }
