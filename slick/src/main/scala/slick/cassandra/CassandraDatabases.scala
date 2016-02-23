@@ -21,12 +21,13 @@ trait CassandraDatabases {self: CassandraBackend =>
   class ZookeeperDatabase(override val executor: AsyncExecutor,
     val zookeeperLocation: String,
     val zNode: String,
+    val keyspace: Option[String],
     val timeout: Int,
     val retryTime: Int) extends CassandraDatabase(executor) {
 
     /** Create a new session. The session needs to be closed explicitly by calling its close() method. */
     def createSession(): Session = {
-      new ZookeeperSessionDef(zookeeperLocation, zNode, timeout, retryTime)
+      new ZookeeperSessionDef(zookeeperLocation, zNode, keyspace, timeout, retryTime)
     }
 
     def close: Unit = {
@@ -37,12 +38,13 @@ trait CassandraDatabases {self: CassandraBackend =>
     * list of cassandra nodes directly. */
   class DirectDatabase(override val executor: AsyncExecutor,
     val nodes: List[String],
+    val keyspace: Option[String],
     val timeout: Int,
     val retryTime: Int) extends CassandraDatabase(executor) {
 
     /** Create a new session. The session needs to be closed explicitly by calling its close() method. */
     def createSession(): Session = {
-      new DirectSessionDef(nodes)
+      new DirectSessionDef(nodes, keyspace)
     }
 
     def close: Unit = {

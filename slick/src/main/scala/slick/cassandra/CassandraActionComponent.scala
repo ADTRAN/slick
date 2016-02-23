@@ -77,7 +77,8 @@ trait CassandraActionComponent extends SqlActionComponent { self: CassandraProfi
   class SchemaActionExtensionMethodsImpl(schema: SchemaDescription) extends super.SchemaActionExtensionMethodsImpl {
     /** Create an Action that creates the entities described by this schema description. */
     def create: ProfileAction[Unit, NoStream, Effect.Schema] = new CassandraAction[Unit]("schema.create", schema.createStatements.toVector) {
-      def run(ctx: Backend#Context, sql: Vector[String]): Unit = {
+      def run(ctx: Backend#Context, cql: Vector[String]): Unit = {
+        for(c <- cql) ctx.session.run(c)
       }
     }
 

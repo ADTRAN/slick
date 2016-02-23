@@ -47,6 +47,10 @@ trait CassandraBackend extends RelationalBackend
     *                     cassandra config.  Defaults to '127.0.0.1:2181'
     * zNode:              zNode containing location of cassandra nodes in
     *                     zookeeper. defaults to '/cassandra'
+    * keyspace:           The keyspace for the session.  This is optional, but
+    *                     if omitted, you will have to manually create and
+    *                     'USE keyspace' using plain CQL queries before
+    *                     using the higher-level API.
     * timeout:            milliseconds to wait for connection before aborting.
     *                     Defaults to 60000.
     * retryTime:          milliseconds to wait between connection retries.
@@ -66,29 +70,32 @@ trait CassandraBackend extends RelationalBackend
   class ZookeeperDatabaseDef(override val executor: AsyncExecutor,
                              override val zookeeperLocation: String,
                              override val zNode: String,
+                             override val keyspace: Option[String],
                              override val timeout: Int,
                              override val retryTime: Int)
-    extends ZookeeperDatabase(executor, zookeeperLocation, zNode, timeout, retryTime)
+    extends ZookeeperDatabase(executor, zookeeperLocation, zNode, keyspace, timeout, retryTime)
     with DatabaseDef
 
   class DirectDatabaseDef(override val executor: AsyncExecutor,
                           override val nodes: List[String],
+                          override val keyspace: Option[String],
                           override val timeout: Int,
                           override val retryTime: Int)
-    extends DirectDatabase(executor, nodes, timeout, retryTime)
+    extends DirectDatabase(executor, nodes, keyspace, timeout, retryTime)
     with DatabaseDef
 
   trait SessionDef extends CassandraSessionDef with super.SessionDef
 
   class ZookeeperSessionDef (override val zookeeperLocation: String,
                              override val zNode: String,
+                             override val keyspace: Option[String],
                              override val timeout: Int,
                              override val retryTime: Int)
-    extends ZookeeperSession(zookeeperLocation, zNode, timeout, retryTime)
+    extends ZookeeperSession(zookeeperLocation, zNode, keyspace, timeout, retryTime)
     with SessionDef
 
-  class DirectSessionDef (override val nodes: List[String])
-    extends    DirectSession(nodes)
+  class DirectSessionDef (override val nodes: List[String], override val keyspace: Option[String])
+    extends    DirectSession(nodes, keyspace)
     with SessionDef
 
   /** The context object passed to database actions by the execution engine. */

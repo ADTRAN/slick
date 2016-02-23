@@ -3,15 +3,21 @@ import org.apache.curator.framework.recipes.cache.{NodeCache, NodeCacheListener}
 import org.apache.curator.framework.state.ConnectionStateListener
 import scala.concurrent.{Promise, ExecutionContext, Future, Await}
 import com.datastax.driver.core.Session
+import com.datastax.driver.core.exceptions._
 import slick.SlickException
 import scala.concurrent.duration._
 import com.datastax.driver.core.Cluster
+import scala.language.postfixOps
+import scala.util.{Try, Failure}
 
 abstract class CassandraSessionDef {
 
   val connection: Future[Session]
   def close(): Unit
   def force(): Unit
+  def run(cql: String): Unit = {
+    Await.result(connection, 1 minute) execute cql
+  }
 
   def buildCluster(nodes: Iterator[String], builder: Cluster.Builder): Cluster = {
     def addNodes(builder: Cluster.Builder, nodes: Iterator[String]): Cluster.Builder = {
@@ -28,12 +34,14 @@ abstract class CassandraSessionDef {
 }
 
 class DirectSession(val nodes: List[String],
+  val keyspace: Option[String],
   val builder: Cluster.Builder = Cluster.builder) extends CassandraSessionDef {
 
   val connectionPromise = Promise[Session]
   val connection = connectionPromise.future
   val cluster = buildCluster(nodes.iterator, builder)
-  connectionPromise trySuccess cluster.connect
+  val session = keyspace map {keyspace => cluster.connect(keyspace)} getOrElse cluster.connect
+  connectionPromise trySuccess session
 
   def close(): Unit = {
   }
@@ -47,6 +55,7 @@ import org.apache.curator.RetryPolicy
 
 class ZookeeperSession(val zookeeperLocation: String,
   val zNode: String,
+  val keyspace: Option[String],
   val timeout: Int,
   val retryTime: Int,
   val builder: Cluster.Builder = Cluster.builder,
@@ -88,7 +97,7 @@ class ZookeeperSession(val zookeeperLocation: String,
   val scheduler = Executors.newScheduledThreadPool(1)
   val connectionTimeout = new Runnable {
     override def run(): Unit = {
-      val failed = connectionPromise tryFailure (new SlickException("Initial connection to zookeeper or cassandra timed out"))
+      val failed = connectionPromise tryFailure (new SlickException(s"Initial connection to zookeeper or cassandra timed out, or zNode not found: $zNode"))
       if (failed) {
         zk.close()
       }
@@ -105,15 +114,27 @@ class ZookeeperSession(val zookeeperLocation: String,
   }
 
   def nodeChanged: Unit = {
+    if (connectionPromise.isCompleted) {
+      throw new SlickException("Changing cassandra's zNode while a connection is in use is not currently supported.")
+    }
+
     val data = new String(nodeCache.getCurrentData.getData)
-    try {
+
+    val session = Try {
       data.lines foreach {node => validateInetAddress(node, "cassandra")}
       val cluster = buildCluster(data.lines, builder)
-      connectionPromise success cluster.connect
-    } catch {
-      case e: SlickException        => connectionPromise tryFailure e
-      case e: IllegalStateException => throw new SlickException("Changing cassandra's zNode while a connection is in use is not currently supported.")
-      case e: Throwable             => throw new SlickException("Unknown exception retrieving cassandra configuration from zookeeper:" + e.getMessage)
+      keyspace map {keyspace => cluster.connect(keyspace)} getOrElse cluster.connect
+    }
+
+    session map (connectionPromise success _)
+
+    val errorMessage = session match {
+      case Failure(e: NoHostAvailableException) => Some("Host addresses or keyspace incorrect or unreachable connecting to cassandra:  ")
+      case _                                    => None
+    }
+
+    session recover {
+      case e => connectionPromise tryFailure (new SlickException(errorMessage getOrElse "" + e.getMessage))
     }
   }
 

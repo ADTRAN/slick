@@ -6,18 +6,15 @@ class KeyspaceTest extends AsyncTest[CassandraTestDB] {
   import tdb.profile.api._
 
   def testKeyspaceCreation = {
-    val command = "CREATE KEYSPACE IF NOT EXISTS slicktest WITH replication = {'class':'SimpleStrategy', 'replication_factor':1};"
-    val action = SimpleDBIO(_.connection.execute(command))
+    val dropIfCommand = "DROP KEYSPACE IF EXISTS slicktest;"
+    val dropCommand   = "DROP KEYSPACE slicktest;"
+    val createCommand = "CREATE KEYSPACE IF NOT EXISTS slicktest WITH replication = {'class':'SimpleStrategy', 'replication_factor':1};"
+    val dropIfAction  = SimpleDBIO(_.connection.execute(dropIfCommand))
+    val dropAction  = SimpleDBIO(_.connection.execute(dropCommand))
+    val createAction  = SimpleDBIO(_.connection.execute(createCommand))
+    val actions = DBIO.seq(dropIfAction, createAction, dropAction, createAction) // recreate at end for other tests
     for {
-      _ <- action
-    } yield ()
-  }
-
-  def testKeyspaceDrop = {
-    val command = "DROP KEYSPACE slicktest;"
-    val action = SimpleDBIO(_.connection.execute(command))
-    for {
-      _ <- action
+      _ <- actions
     } yield ()
   }
 }

@@ -17,6 +17,7 @@ class CassandraDatabaseFactoryTests extends WordSpec
         val config = ConfigFactory.parseString("""
           zookeeper = "127.0.0.1:2181"
           zNode     = "/cassandra"
+          keyspace  = "slicktest"
           timeout   = 0
           retryTime = 0
           """)
@@ -33,6 +34,7 @@ class CassandraDatabaseFactoryTests extends WordSpec
 
         val config = ConfigFactory.parseString("""
           nodes     = ["127.0.0.1:9042"]
+          keyspace  = "slicktest"
           timeout   = 0
           retryTime = 0
           """)
@@ -50,6 +52,7 @@ class CassandraDatabaseFactoryTests extends WordSpec
         val config = ConfigFactory.parseString("""
           zookeeper = "127.0.0.1:2181"
           nodes     = ["127.0.0.1:9042"]
+          keyspace  = "slicktest"
           timeout   = 0
           retryTime = 0
           """)
